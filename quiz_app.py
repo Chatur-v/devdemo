@@ -31,17 +31,13 @@ def detect_language_from_topic(topic: str):
     return None
 
 
-def is_valid_code(code: str, language: str) -> bool:
-    if len(code.strip()) < 15:
-        return False
-
-    patterns = {
-        "Python": ["def ", "return"],
-        "Java": ["class ", "return", ";"],
-        "C": ["#include", "return"],
-        "C++": ["#include", "return"]
-    }
-    return any(p in code for p in patterns.get(language, []))
+def looks_like_attempt(code: str) -> bool:
+    """
+    Very light check:
+    - empty or very small input = no attempt
+    - otherwise treat as attempt
+    """
+    return len(code.strip()) >= 8
 
 
 # -------------------- SESSION STATE --------------------
@@ -73,6 +69,7 @@ if st.button("Generate Quiz"):
     if num_mcq > 0:
         mcq_prompt = f"""
         Generate {num_mcq} MCQs on "{topic}"
+
         Format strictly:
         Q1. Question
         A) ...
@@ -81,6 +78,7 @@ if st.button("Generate Quiz"):
         D) ...
         Correct: B
         """
+
         res = client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": mcq_prompt}]
@@ -108,8 +106,9 @@ if st.button("Generate Quiz"):
         Format:
         ---Problem---
         Statement: ...
-        ExpectedLogic: Explain the solution idea in words, not code.
+        ExpectedLogic: Describe the solution idea in words (not code).
         """
+
         res = client.chat.completions.create(
             model=MODEL,
             messages=[{"role": "user", "content": code_prompt}]
@@ -164,47 +163,85 @@ if st.session_state.quiz:
 
         st.markdown(f"**Language:** {language}")
 
-        user_code = st.text_area("Write your code:", height=200, key=f"user_code_{i}")
+        user_code = st.text_area(
+            "Write your code (or try anything):",
+            height=220,
+            key=f"user_code_{i}"
+        )
 
         if st.button("Evaluate Code", key=f"eval_{i}"):
 
-            if not is_valid_code(user_code, language):
-                st.error("❌ Code is incomplete or invalid.")
-                continue
+            attempted = looks_like_attempt(user_code)
 
-            eval_prompt = f"""
-            You are an expert programming evaluator.
+            if attempted:
+                # Evaluation mode
+                eval_prompt = f"""
+                You are an expert programming evaluator.
 
-            IMPORTANT:
-            - Judge ONLY logical correctness
-            - Variable names do NOT matter
-            - Type hints do NOT matter
-            - Comments and formatting do NOT matter
-            - Extra print statements are allowed
+                RULES:
+                - Judge ONLY logical correctness
+                - Program-style and function-style both allowed
+                - Variable names, formatting, and type hints do NOT matter
+                - If logic solves the problem → PASS
+                - Otherwise → FAIL
 
-            Problem:
-            {prob['stmt']}
+                Problem:
+                {prob['stmt']}
 
-            Expected Logic (conceptual):
-            {prob['logic']}
+                Expected Logic:
+                {prob['logic']}
 
-            User Language: {language}
+                User Language: {language}
 
-            User Code:
-            {user_code}
+                User Code:
+                {user_code}
 
-            Respond strictly as:
-            Result: PASS or FAIL
-            Reason: one short sentence
-            """
+                Respond EXACTLY in this format:
+
+                Result: PASS or FAIL
+                Issue:
+                - Explanation
+
+                Correct Solution ({language}):
+                <correct code>
+                """
+            else:
+                # Help / Tutor mode
+                eval_prompt = f"""
+                You are a friendly programming tutor.
+
+                The user is a beginner and could not write correct code.
+
+                TASK:
+                - Explain how to approach the problem step-by-step
+                - Then show a correct solution in {language}
+                - Be encouraging and simple
+
+                Problem:
+                {prob['stmt']}
+
+                Expected Logic:
+                {prob['logic']}
+
+                User Input:
+                {user_code}
+
+                Respond EXACTLY in this format:
+
+                Guidance:
+                - Step-by-step explanation
+
+                Correct Solution ({language}):
+                <correct code>
+                """
 
             res = client.chat.completions.create(
                 model=MODEL,
                 messages=[{"role": "user", "content": eval_prompt}]
             )
 
-            st.markdown("**AI Evaluation Result:**")
-            st.write(res.choices[0].message.content)
+            st.markdown("### 🧠 AI Feedback")
+            st.code(res.choices[0].message.content)
             st.session_state.code_done = True
 
     # ===== FINAL =====
